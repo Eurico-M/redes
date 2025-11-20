@@ -3,32 +3,33 @@ import java.net.*;
 
 class TCPClient {
 
-   public static void main(String argv[]) throws Exception
-   {    
-      String sentence;
-      String modifiedSentence;
+    public static void main(String argv[]) throws Exception {
+        String sentence;
+        String modifiedSentence;
 
-      BufferedReader inFromUser =
-         new BufferedReader(new InputStreamReader(System.in));
+        BufferedReader inFromUser = new BufferedReader(
+            new InputStreamReader(System.in)
+        );
 
-      Socket clientSocket = new Socket(argv[0], 6789);
+        Socket clientSocket = new Socket(argv[0], 6789);
 
-      DataOutputStream outToServer =
-         new DataOutputStream(clientSocket.getOutputStream());
+        DataOutputStream outToServer = new DataOutputStream(
+            clientSocket.getOutputStream()
+        );
 
-      BufferedReader inFromServer =
-         new BufferedReader(new
-               InputStreamReader(clientSocket.getInputStream()));
+        BufferedReader inFromServer = new BufferedReader(
+            new InputStreamReader(clientSocket.getInputStream())
+        );
 
-      sentence = inFromUser.readLine();
-
-      while(sentence != null) {
-        outToServer.writeBytes(sentence + '\n');
-        modifiedSentence = inFromServer.readLine();
-        System.out.println("FROM SERVER: " + modifiedSentence);
         sentence = inFromUser.readLine();
-      }
 
-      clientSocket.close();
-   }
+        while (sentence != null) {
+            outToServer.writeBytes(sentence + '\n');
+            modifiedSentence = inFromServer.readLine();
+            System.out.println("FROM SERVER: " + modifiedSentence);
+            sentence = inFromUser.readLine();
+        }
+
+        clientSocket.close();
+    }
 }

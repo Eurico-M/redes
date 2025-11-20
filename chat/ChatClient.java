@@ -17,6 +17,9 @@ public class ChatClient {
     // Se for necessário adicionar variáveis ao objecto ChatClient, devem
     // ser colocadas aqui
 
+    String server;
+    int port;
+
     // Método a usar para acrescentar uma string à caixa de texto
     // * NÃO MODIFICAR *
     public void printMessage(final String message) {
@@ -60,6 +63,9 @@ public class ChatClient {
 
         // Se for necessário adicionar código de inicialização ao
         // construtor, deve ser colocado aqui
+
+        this.server = server;
+        this.port = port;
     }
 
     // Método invocado sempre que o utilizador insere uma mensagem
@@ -71,6 +77,33 @@ public class ChatClient {
     // Método principal do objecto
     public void run() throws IOException {
         // PREENCHER AQUI
+        String sentence;
+        String modifiedSentence;
+
+        BufferedReader inFromUser = new BufferedReader(
+            new InputStreamReader(System.in)
+        );
+
+        Socket clientSocket = new Socket(server, port);
+
+        DataOutputStream outToServer = new DataOutputStream(
+            clientSocket.getOutputStream()
+        );
+
+        BufferedReader inFromServer = new BufferedReader(
+            new InputStreamReader(clientSocket.getInputStream())
+        );
+
+        sentence = inFromUser.readLine();
+
+        while (sentence != null) {
+            outToServer.writeBytes(sentence + '\n');
+            modifiedSentence = inFromServer.readLine();
+            System.out.println("FROM SERVER: " + modifiedSentence);
+            sentence = inFromUser.readLine();
+        }
+
+        clientSocket.close();
     }
 
     // Instancia o ChatClient e arranca-o invocando o seu método run()
