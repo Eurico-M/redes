@@ -6,13 +6,27 @@ import java.nio.charset.*;
 import java.util.*;
 
 public class ChatServer {
+    private static int nextClientId = 1;
+    private static Map<SocketChannel, ClientInfo> clients = new HashMap<>();
+
+    private static class ClientInfo {
+        int id;
+        String name;
+        String room;
+
+        ClientInfo() {
+            this.id = nextClientId++;
+            this.name = "Client_" + this.id;
+            this.room = "outside";
+        };
+    }
 
     // A pre-allocated buffer for the received data
     private static final ByteBuffer buffer = ByteBuffer.allocate(16384);
 
     // Decoder for incoming text -- assume UTF-8
-    // private static final Charset charset = Charset.forName("UTF8");
-    // private static final CharsetDecoder decoder = charset.newDecoder();
+    private static final Charset charset = Charset.forName("UTF8");
+    private static final CharsetDecoder decoder = charset.newDecoder();
 
     public static void main(String args[]) throws Exception {
         // Parse port from command line
@@ -62,15 +76,19 @@ public class ChatServer {
                         // It's an incoming connection.  Register this socket with
                         // the Selector so we can listen for input on it
                         Socket s = ss.accept();
-                        System.out.println("Got connection from " + s);
-
                         // Make sure to make it non-blocking, so we can use a selector
                         // on it.
                         SocketChannel sc = s.getChannel();
                         sc.configureBlocking(false);
 
+                        // Criar e Guardar Novo Cliente
+                        ClientInfo client = new ClientInfo();
+                        clients.put(sc, client);
+
                         // Register it with the selector, for reading
                         sc.register(selector, SelectionKey.OP_READ);
+                        System.out.println("New client: " + client.name + " from " + s);
+
                     } else if (key.isReadable()) {
                         SocketChannel sc = null;
 
@@ -120,38 +138,47 @@ public class ChatServer {
         }
     }
 
-    // Just read the message from the socket and send it to stdout
+    // Processar mensagem
     private static boolean processInput(
         SocketChannel sc,
         Set<SelectionKey> keys
     ) throws IOException {
         // Read the message to the buffer
         buffer.clear();
-        sc.read(buffer);
-        buffer.flip();
+        int bytesRead = sc.read(buffer);
 
-        // If no data, close the connection
-        if (buffer.limit() == 0) {
+        // If no data or connection closed, close the connection
+        if (bytesRead == -1) {
             return false;
         }
 
-        // Decode and print the message to stdout
-        // String message = decoder.decode(buffer).toString();
-        // ALINEA C)
-        // buffer.rewind();
-        // sc.write(buffer);
-        // System.out.print(message);
+        // Prepare buffer for writing
+        buffer.flip();
+        String message = decoder.decode(buffer).toString();
+        ClientInfo client = clients.get(sc);
 
-        // ALINEA D)
-        for (SelectionKey key : keys) {
-            if (key.isAcceptable()) {
-                continue;
-            }
-            SocketChannel soc = (SocketChannel) key.channel();
-            soc.write(buffer);
-            buffer.rewind();
-        }
+        String formattedMsg = client.name + ": " + message + "\n";
+        broadcast(sc, formattedMsg);
+
+        // Simple echo back to the same client
+        sc.write(buffer);
 
         return true;
+    }
+
+    private static void broadcast(SocketChannel sender, String message) {
+        ByteBuffer msgBuffer = ByteBuffer.wrap(message.getBytes());
+        String senderRoom = clients.get(sender).room;
+
+        for (Map.Entry<SocketChannel, ClientInfo> c : clients.entrySet()) {
+            if (c.getValue().room == senderRoom) {
+                try {
+                    msgBuffer.rewind();
+                    sender.write(msgBuffer);
+                } catch (IOException e) {
+                    System.out.println("Client " + c.getValue().name + " disconnected");
+                }
+            }
+        }
     }
 }

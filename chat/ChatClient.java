@@ -17,8 +17,11 @@ public class ChatClient {
     // Se for necessário adicionar variáveis ao objecto ChatClient, devem
     // ser colocadas aqui
 
-    String server;
-    int port;
+    private Socket socket;
+    private PrintWriter out;
+    private BufferedReader in;
+    private String server;
+    private int port;
 
     // Método a usar para acrescentar uma string à caixa de texto
     // * NÃO MODIFICAR *
@@ -45,6 +48,8 @@ public class ChatClient {
                 @Override
                 public void actionPerformed(ActionEvent e) {
                     try {
+                        // Sempre que uma mensagem é inserida na caixa de texto, esta função é chamada.
+                        // Está definida mais abaixo.
                         newMessage(chatBox.getText());
                     } catch (IOException ex) {} finally {
                         chatBox.setText("");
@@ -72,38 +77,53 @@ public class ChatClient {
     // na caixa de entrada
     public void newMessage(String message) throws IOException {
         // PREENCHER AQUI com código que envia a mensagem ao servidor
+        if (out != null) {
+            out.println(message);
+            out.flush();
+        }
     }
 
     // Método principal do objecto
     public void run() throws IOException {
-        // PREENCHER AQUI
-        String sentence;
-        String modifiedSentence;
+        try {
+            // Create socket connection
+            socket = new Socket(server, port);
+            out = new PrintWriter(socket.getOutputStream(), true);
+            in = new BufferedReader(
+                new InputStreamReader(socket.getInputStream())
+            );
 
-        BufferedReader inFromUser = new BufferedReader(
-            new InputStreamReader(System.in)
-        );
+            // Start a thread to listen for messages from server
+            Thread listenerThread = new Thread(new ServerListener());
+            listenerThread.start();
 
-        Socket clientSocket = new Socket(server, port);
-
-        DataOutputStream outToServer = new DataOutputStream(
-            clientSocket.getOutputStream()
-        );
-
-        BufferedReader inFromServer = new BufferedReader(
-            new InputStreamReader(clientSocket.getInputStream())
-        );
-
-        sentence = inFromUser.readLine();
-
-        while (sentence != null) {
-            outToServer.writeBytes(sentence + '\n');
-            modifiedSentence = inFromServer.readLine();
-            System.out.println("FROM SERVER: " + modifiedSentence);
-            sentence = inFromUser.readLine();
+        } catch (IOException e) {
+            throw e;
         }
+    }
 
-        clientSocket.close();
+    // Escutar o Servidor para receber mensagens
+    private class ServerListener implements Runnable {
+
+        @Override
+        public void run() {
+            try {
+                String serverMessage;
+                while ((serverMessage = in.readLine()) != null) {
+                    // This will be called from a non-EDT thread, so use SwingUtilities
+                    final String msg = serverMessage;
+                    SwingUtilities.invokeLater(
+                        new Runnable() {
+                            @Override
+                            public void run() {
+                                printMessage(msg);
+                            }
+                        }
+                    );
+                }
+            } catch (IOException e) {
+            }
+        }
     }
 
     // Instancia o ChatClient e arranca-o invocando o seu método run()
