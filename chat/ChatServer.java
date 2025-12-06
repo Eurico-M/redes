@@ -6,6 +6,29 @@ import java.nio.charset.*;
 import java.util.*;
 
 public class ChatServer {
+
+    // Decoder for incoming text -- assume UTF-8
+    private static final Charset charset = Charset.forName("UTF8");
+    private static final CharsetDecoder decoder = charset.newDecoder();
+
+    // enumerador para representar os tipos de mensagens (descrições copiadas do enunciado)
+    enum MsgType {
+        OK,             // Usado para indicar sucesso do comando enviado pelo cliente.
+        ERROR,          // Usado para indicar insucesso do comando enviado pelo cliente.
+        MESSAGE,        // Usado para difundir aos utilizadores numa sala a mensagem (simples) enviada pelo utilizador nome, também nessa sala.
+        NEWNICK,        // Usado para indicar a todos os utilizadores duma sala que o utilizador nome_antigo, que está nessa sala, mudou de nome para nome_novo.
+        JOINED,         // Usado para indicar aos utilizadores numa sala que entrou um novo utilizador, com o nome nome, nessa sala.
+        LEFT,           // Usado para indicar aos utilizadores numa sala que o utilizador com o nome nome, que também se encontrava nessa sala, saiu.
+        BYE             // Usado para confirmar a um utilizador que invocou o comando /bye a sua saída.
+    }
+    // enumerador para representar informação do estado de cada cliente (descrições copiadas do enunciado)
+    enum ClientState {
+        INIT,           // Estado inicial de um utilizador que acabou de estabelecer a conexão ao servidor e, portanto, ainda não tem um nome associado.
+        OUTSIDE,        // O utilizador já tem um nome associado, mas não está em nenhuma sala de chat.
+        INSIDE          // O utilizador está numa sala de chat, podendo enviar mensagens simples (para essa sala) e devendo receber todas as mensagens que os outros utilizadores nessa sala enviem.
+    }
+
+    // Informação de cada cliente
     private static int nextClientId = 1;
     private static Map<SocketChannel, ClientInfo> clients = new HashMap<>();
 
@@ -13,20 +36,20 @@ public class ChatServer {
         int id;
         String name;
         String room;
+        ByteBuffer buffer;
+        ClientState state;
 
         ClientInfo() {
             this.id = nextClientId++;
             this.name = "Client_" + this.id;
-            this.room = "outside";
+            this.room = "";
+            this.buffer = ByteBuffer.allocate(16384);
+            this.state = OUTSIDE;
         };
     }
 
-    // A pre-allocated buffer for the received data
-    private static final ByteBuffer buffer = ByteBuffer.allocate(16384);
 
-    // Decoder for incoming text -- assume UTF-8
-    private static final Charset charset = Charset.forName("UTF8");
-    private static final CharsetDecoder decoder = charset.newDecoder();
+    
 
     public static void main(String args[]) throws Exception {
         // Parse port from command line
@@ -129,7 +152,6 @@ public class ChatServer {
                         }
                     }
                 }
-
                 // We remove the selected keys, because we've dealt with them.
                 keys.clear();
             }
@@ -139,34 +161,79 @@ public class ChatServer {
     }
 
     // Processar mensagem
-    private static boolean processInput(
-        SocketChannel sc,
-        Set<SelectionKey> keys
-    ) throws IOException {
-        // Read the message to the buffer
-        buffer.clear();
-        int bytesRead = sc.read(buffer);
+    private static boolean processInput(SocketChannel sc, Set<SelectionKey> keys) throws IOException {
+        // usar buffer de cada cliente
+        ClientInfo client = clients.get(sc);
+        ByteBuffer clientBuffer = client.buffer;
+        
+        int bytesRead = sc.read(clientBuffer);
 
-        // If no data or connection closed, close the connection
         if (bytesRead == -1) {
             return false;
         }
 
-        // Prepare buffer for writing
-        buffer.flip();
-        String message = decoder.decode(buffer).toString();
-        ClientInfo client = clients.get(sc);
-
-        String formattedMsg = client.name + ": " + message + "\n";
-        broadcast(sc, formattedMsg);
-
-        // Simple echo back to the same client
-        sc.write(buffer);
+        processClientBuffer(sc, client);
 
         return true;
     }
 
-    private static void broadcast(SocketChannel sender, String message) {
+    // lidar com a delineação de mensagens
+    private static void processClientBuffer(SocketChannel sc, ClientInfo client) {
+        ByteBuffer buffer = client.buffer;
+
+        buffer.flip();
+
+        String received = decoder.decode(buffer).toString();
+        // percorrer a string
+        int start = 0;
+        while (true) {
+            // marcar a primeira instância de '\n'
+            int newlinePosition = received.indexOf('\n', start);
+            // se não houver nenhuma, guardar a string no buffer novamente (ainda não recebemos a mensagem toda)
+            if (newlinePosition == -1) {
+                buffer.clear();
+                buffer.put(received.getBytes());
+                break;
+            }
+            // se houver, processar a linha até essa posição
+            String line = received.substring(start, newlinePosition).trim();
+            // não enviar linhas vazias
+            if (!line.isEmpty()) {
+                processLine(sc, client, line);
+            }
+            // processar próxima linha, isto é, marcar start como o próximo index depois do último newline
+            start = newlinePosition + 1;
+        }
+    }
+
+    private static void processLine(SocketChannel sc, ClientInfo client, String line) {
+        // método semelhante (mas inverso) ao implementado no cliente para fazer escape de '/'
+        String escapedLine = "";
+        if (line.charAt(0) == '/') {
+            escapedLine = line.substring(1);
+        }
+        else {
+            escapedLine = line;
+        }
+
+        if (escapedLine.startsWith("/nick")) {
+            command_nick(sc, client, escapedLine);
+        }
+        else if (escapedLine.startsWith("/join")) {
+            command_join(sc, client);
+        }
+        else if (escapedLine.startsWith("/leave")) {
+            command_leave(sc, client);
+        }
+        else if (escapedLine.startsWith("/bye")) {
+            command_bye(sc, client);
+        }
+        else {
+            broadcast(MsgType.MESSAGE, sc, escapedLine);
+        }
+    }
+
+    private static void broadcast(MsgType type, SocketChannel sender, String message) {
         ByteBuffer msgBuffer = ByteBuffer.wrap(message.getBytes());
         String senderRoom = clients.get(sender).room;
 

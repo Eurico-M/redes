@@ -49,7 +49,6 @@ public class ChatClient {
                 public void actionPerformed(ActionEvent e) {
                     try {
                         // Sempre que uma mensagem é inserida na caixa de texto, esta função é chamada.
-                        // Está definida mais abaixo.
                         newMessage(chatBox.getText());
                     } catch (IOException ex) {} finally {
                         chatBox.setText("");
@@ -73,14 +72,29 @@ public class ChatClient {
         this.port = port;
     }
 
-    // Método invocado sempre que o utilizador insere uma mensagem
-    // na caixa de entrada
+    // Método invocado sempre que o utilizador insere uma mensagem na caixa de entrada
     public void newMessage(String message) throws IOException {
         // PREENCHER AQUI com código que envia a mensagem ao servidor
         if (out != null) {
-            out.println(message);
+            // fazer escape de '/' se necessário
+            String escapedMessage = processMessage(message);
+            // imprimir a mensagem (não para o stdout como é hábito, mas para o servidor)
+            out.println(escapedMessage);
             out.flush();
         }
+    }
+    // processar a mensagem
+    private static String processMessage(String message) {
+        String escapedMessage = "";
+        // se a mensagem começar por '/'
+        if (message.charAt(0) == '/') {
+            // adicionar um '/' ao início da mensagem
+            escapedMessage = '/' + message;
+        }
+        else {
+            escapedMessage = message;
+        }
+        return escapedMessage;
     }
 
     // Método principal do objecto
