@@ -13,19 +13,27 @@ public class ChatServer {
 
     // enumerador para representar os tipos de mensagens (descrições copiadas do enunciado)
     enum MsgType {
-        OK,             // Usado para indicar sucesso do comando enviado pelo cliente.
-        ERROR,          // Usado para indicar insucesso do comando enviado pelo cliente.
-        MESSAGE,        // Usado para difundir aos utilizadores numa sala a mensagem (simples) enviada pelo utilizador nome, também nessa sala.
-        NEWNICK,        // Usado para indicar a todos os utilizadores duma sala que o utilizador nome_antigo, que está nessa sala, mudou de nome para nome_novo.
-        JOINED,         // Usado para indicar aos utilizadores numa sala que entrou um novo utilizador, com o nome nome, nessa sala.
-        LEFT,           // Usado para indicar aos utilizadores numa sala que o utilizador com o nome nome, que também se encontrava nessa sala, saiu.
-        BYE             // Usado para confirmar a um utilizador que invocou o comando /bye a sua saída.
+        MSG_OK,             // Usado para indicar sucesso do comando enviado pelo cliente.
+        MSG_ERROR,          // Usado para indicar insucesso do comando enviado pelo cliente.
+        MSG_MESSAGE,        // Usado para difundir aos utilizadores numa sala a mensagem (simples) enviada pelo utilizador nome, também nessa sala.
+        MSG_NEWNICK,        // Usado para indicar a todos os utilizadores duma sala que o utilizador nome_antigo, que está nessa sala, mudou de nome para nome_novo.
+        MSG_JOINED,         // Usado para indicar aos utilizadores numa sala que entrou um novo utilizador, com o nome nome, nessa sala.
+        MSG_LEFT,           // Usado para indicar aos utilizadores numa sala que o utilizador com o nome nome, que também se encontrava nessa sala, saiu.
+        MSG_BYE             // Usado para confirmar a um utilizador que invocou o comando /bye a sua saída.
     }
     // enumerador para representar informação do estado de cada cliente (descrições copiadas do enunciado)
     enum ClientState {
         INIT,           // Estado inicial de um utilizador que acabou de estabelecer a conexão ao servidor e, portanto, ainda não tem um nome associado.
         OUTSIDE,        // O utilizador já tem um nome associado, mas não está em nenhuma sala de chat.
         INSIDE          // O utilizador está numa sala de chat, podendo enviar mensagens simples (para essa sala) e devendo receber todas as mensagens que os outros utilizadores nessa sala enviem.
+    }
+    // enumerador para representar os comandos disponíveis
+    enum Command {
+        NICK,           // Usado para escolher um nome ou para mudar de nome. O nome escolhido não pode estar já a ser usado por outro utilizador.  
+        JOIN,           // Usado para entrar numa sala de chat ou para mudar de sala. Se a sala ainda não existir, é criada.
+        LEAVE,          // Usado para o utilizador sair da sala de chat em que se encontra.
+        BYE,            // Usado para sair do chat.
+        MESSAGE
     }
 
     // Informação de cada cliente
@@ -44,11 +52,14 @@ public class ChatServer {
             this.name = "Client_" + this.id;
             this.room = "";
             this.buffer = ByteBuffer.allocate(16384);
-            this.state = OUTSIDE;
+            this.state = ClientState.OUTSIDE;
         };
     }
 
-
+    // Salas de chat
+    private static Set<String> rooms = new HashSet<>();
+    // Todos os nomes
+    private static Set<String> names = new HashSet<>();
     
 
     public static void main(String args[]) throws Exception {
@@ -107,6 +118,7 @@ public class ChatServer {
                         // Criar e Guardar Novo Cliente
                         ClientInfo client = new ClientInfo();
                         clients.put(sc, client);
+                        names.add(client.name);
 
                         // Register it with the selector, for reading
                         sc.register(selector, SelectionKey.OP_READ);
@@ -183,7 +195,12 @@ public class ChatServer {
 
         buffer.flip();
 
-        String received = decoder.decode(buffer).toString();
+        String received = null;
+        try {
+            received = decoder.decode(buffer).toString();
+        } catch (CharacterCodingException e) {
+            e.printStackTrace();
+        }
         // percorrer a string
         int start = 0;
         while (true) {
@@ -217,35 +234,182 @@ public class ChatServer {
         }
 
         if (escapedLine.startsWith("/nick")) {
-            command_nick(sc, client, escapedLine);
+            String newNick = escapedLine.substring(6);
+            processTransition(Command.NICK, sc, newNick);
         }
         else if (escapedLine.startsWith("/join")) {
-            command_join(sc, client);
+            String newRoom = escapedLine.substring(6);
+            processTransition(Command.JOIN, sc, newRoom);
         }
         else if (escapedLine.startsWith("/leave")) {
-            command_leave(sc, client);
+            processTransition(Command.LEAVE, sc, "null");
         }
         else if (escapedLine.startsWith("/bye")) {
-            command_bye(sc, client);
+            processTransition(Command.BYE, sc, "null");
         }
         else {
-            broadcast(MsgType.MESSAGE, sc, escapedLine);
+            processTransition(Command.MESSAGE, sc, escapedLine);
         }
     }
 
-    private static void broadcast(MsgType type, SocketChannel sender, String message) {
-        ByteBuffer msgBuffer = ByteBuffer.wrap(message.getBytes());
-        String senderRoom = clients.get(sender).room;
-
+    private static List<SocketChannel> allUsersInRoom(SocketChannel sc, String room) {
+        List<SocketChannel> output = new LinkedList<>();
         for (Map.Entry<SocketChannel, ClientInfo> c : clients.entrySet()) {
-            if (c.getValue().room == senderRoom) {
-                try {
-                    msgBuffer.rewind();
-                    sender.write(msgBuffer);
-                } catch (IOException e) {
-                    System.out.println("Client " + c.getValue().name + " disconnected");
-                }
+            if (c.getValue().room == room) {
+                output.add(c.getKey());
             }
         }
+        return output;
+    }
+
+    private static List<SocketChannel> otherUsersInRoom(SocketChannel sc, String room) {
+        List<SocketChannel> output = new LinkedList<>();
+        for (Map.Entry<SocketChannel, ClientInfo> c : clients.entrySet()) {
+            if (c.getKey() != sc && c.getValue().room == room) {
+                output.add(c.getKey());
+            }
+        }
+        return output;
+    }
+
+    private static void processTransition(Command cmd, SocketChannel sc, String msg) {
+        // máquina de estados
+        switch (cmd) {
+
+            case NICK:
+                // nome já existe
+                if (names.contains(msg)) {
+                    unicast(MsgType.MSG_ERROR, sc, "null");
+                }
+                else {
+                    String oldName = clients.get(sc).name;
+                    clients.get(sc).name = msg;
+                    names.add(clients.get(sc).name);
+                    names.remove(oldName);
+                    unicast(MsgType.MSG_OK, sc, "null");
+
+                    if (clients.get(sc).state == ClientState.INSIDE) {
+                        broadcast(MsgType.MSG_NEWNICK, sc, oldName, "null");
+                    }
+                    else {
+                        clients.get(sc).state = ClientState.OUTSIDE;
+                    }                
+                }
+                break;
+
+            case JOIN:
+                if (clients.get(sc).state == ClientState.INIT) {
+                    unicast(MsgType.MSG_ERROR, sc, "null");
+                } else {
+                    if (!rooms.contains(msg)) {
+                        rooms.add(msg);
+                    }
+                    String oldRoom = clients.get(sc).room;
+                    clients.get(sc).room = msg;
+                    unicast(MsgType.MSG_OK, sc, "null");
+                    broadcast(MsgType.MSG_JOINED, sc, "null", "null");
+
+                    if (clients.get(sc).state == ClientState.INSIDE) {
+                        broadcast(MsgType.MSG_LEFT, sc, oldRoom, "null");
+                    }
+                    else {
+                        clients.get(sc).state = ClientState.INSIDE;
+                    }
+                }
+                break;
+            
+            case LEAVE:
+                if (clients.get(sc).state != ClientState.INSIDE) {
+                    unicast(MsgType.MSG_ERROR, sc, "null");
+                } 
+                else {
+                    String oldRoom = clients.get(sc).room;
+                    clients.get(sc).room = "";
+                    clients.get(sc).state = ClientState.OUTSIDE;
+
+                    unicast(MsgType.MSG_OK, sc, "null");
+                    broadcast(MsgType.MSG_LEFT, sc, oldRoom, "null");
+                }
+                break;
+            
+            case BYE:
+                unicast(MsgType.MSG_BYE, sc, "null");
+                if (clients.get(sc).state == ClientState.INSIDE) {
+                    broadcast(MsgType.MSG_LEFT, sc, "null", "null");
+                }
+                break;
+            
+            case MESSAGE:
+                if (clients.get(sc).state == ClientState.INSIDE) {
+                    broadcast(MsgType.MSG_MESSAGE, sc, msg, "null");
+                }
+                else {
+                    unicast(MsgType.MSG_ERROR, sc, "null");
+                }
+                break;
+        }
+    }
+
+    private static void unicast(MsgType type, SocketChannel sc, String msg) {
+        String output = null;
+        switch (type) {
+            case MSG_OK:
+                output = "OK\n";
+                break;
+            case MSG_ERROR:
+                output = "ERROR\n";
+                break;
+            default:
+                break;
+        }
+        ByteBuffer msgBuffer = ByteBuffer.wrap(output.getBytes());
+        try {
+            msgBuffer.rewind();
+            sc.write(msgBuffer);
+        } catch (IOException e) {}
+    }
+
+    private static void broadcast(MsgType type, SocketChannel sc, String msg1, String msg2) {
+        String room = clients.get(sc).room;
+        String msg = null;
+        List<SocketChannel> dest = null;
+
+        switch (type) {
+        
+            case MSG_NEWNICK:
+                // msg1 guarda o nick antigo
+                msg = "NEWNICK" + " " + msg1 + " " + clients.get(sc).name + "\n";
+                dest = otherUsersInRoom(sc, room);
+                break;
+            
+            case MSG_JOINED:
+                msg = "JOINED" + " " + clients.get(sc).name + "\n";
+                dest = otherUsersInRoom(sc, room);
+                break;
+
+            case MSG_LEFT:
+                msg = "LEFT" + " " + clients.get(sc).name + "\n";
+                // msg1 guarda o room antigo
+                dest = otherUsersInRoom(sc, msg1);
+                break;
+            
+            case MSG_MESSAGE:
+                // msg1 guarda a mensagem
+                msg = "MESSAGE" + " " + clients.get(sc).name + " " + msg1 + "\n";
+                dest = allUsersInRoom(sc, room);
+                break;
+
+            default:
+                break;
+        }
+        
+        ByteBuffer msgBuffer = ByteBuffer.wrap(msg.getBytes());
+        for (SocketChannel c : dest) {
+            try {
+                msgBuffer.rewind();
+                c.write(msgBuffer);
+            } catch (IOException e) {}
+        }   
+
     }
 }
