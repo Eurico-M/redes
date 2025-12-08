@@ -19,7 +19,8 @@ public class ChatServer {
         MSG_NEWNICK,        // Usado para indicar a todos os utilizadores duma sala que o utilizador nome_antigo, que está nessa sala, mudou de nome para nome_novo.
         MSG_JOINED,         // Usado para indicar aos utilizadores numa sala que entrou um novo utilizador, com o nome nome, nessa sala.
         MSG_LEFT,           // Usado para indicar aos utilizadores numa sala que o utilizador com o nome nome, que também se encontrava nessa sala, saiu.
-        MSG_BYE             // Usado para confirmar a um utilizador que invocou o comando /bye a sua saída.
+        MSG_BYE,            // Usado para confirmar a um utilizador que invocou o comando /bye a sua saída.
+        MSG_PRIVATE
     }
     // enumerador para representar informação do estado de cada cliente (descrições copiadas do enunciado)
     enum ClientState {
@@ -33,7 +34,8 @@ public class ChatServer {
         JOIN,           // Usado para entrar numa sala de chat ou para mudar de sala. Se a sala ainda não existir, é criada.
         LEAVE,          // Usado para o utilizador sair da sala de chat em que se encontra.
         BYE,            // Usado para sair do chat.
-        MESSAGE
+        MESSAGE,
+        PRIVATE
     }
 
     // Informação de cada cliente
@@ -247,6 +249,10 @@ public class ChatServer {
         else if (escapedLine.startsWith("/bye")) {
             processTransition(Command.BYE, sc, "null");
         }
+        else if (escapedLine.startsWith("/priv")) {
+            String privMsg = escapedLine.substring(6);
+            processTransition(Command.PRIVATE, sc, privMsg);
+        }
         else {
             processTransition(Command.MESSAGE, sc, escapedLine);
         }
@@ -279,17 +285,17 @@ public class ChatServer {
             case NICK:
                 // nome já existe
                 if (names.contains(msg)) {
-                    unicast(MsgType.MSG_ERROR, sc, "null");
+                    unicast(MsgType.MSG_ERROR, sc, "null", "null");
                 }
                 else {
                     String oldName = clients.get(sc).name;
                     clients.get(sc).name = msg;
                     names.add(clients.get(sc).name);
                     names.remove(oldName);
-                    unicast(MsgType.MSG_OK, sc, "null");
+                    unicast(MsgType.MSG_OK, sc, "null", "null");
 
                     if (clients.get(sc).state == ClientState.INSIDE) {
-                        broadcast(MsgType.MSG_NEWNICK, sc, oldName, "null");
+                        broadcast(MsgType.MSG_NEWNICK, sc, oldName);
                     }
                     else {
                         clients.get(sc).state = ClientState.OUTSIDE;
@@ -299,18 +305,18 @@ public class ChatServer {
 
             case JOIN:
                 if (clients.get(sc).state == ClientState.INIT) {
-                    unicast(MsgType.MSG_ERROR, sc, "null");
+                    unicast(MsgType.MSG_ERROR, sc, "null", "null");
                 } else {
                     if (!rooms.contains(msg)) {
                         rooms.add(msg);
                     }
                     String oldRoom = clients.get(sc).room;
                     clients.get(sc).room = msg;
-                    unicast(MsgType.MSG_OK, sc, "null");
-                    broadcast(MsgType.MSG_JOINED, sc, "null", "null");
+                    unicast(MsgType.MSG_OK, sc, "null", "null");
+                    broadcast(MsgType.MSG_JOINED, sc, "null");
 
                     if (clients.get(sc).state == ClientState.INSIDE) {
-                        broadcast(MsgType.MSG_LEFT, sc, oldRoom, "null");
+                        broadcast(MsgType.MSG_LEFT, sc, oldRoom);
                     }
                     else {
                         clients.get(sc).state = ClientState.INSIDE;
@@ -320,38 +326,67 @@ public class ChatServer {
             
             case LEAVE:
                 if (clients.get(sc).state != ClientState.INSIDE) {
-                    unicast(MsgType.MSG_ERROR, sc, "null");
+                    unicast(MsgType.MSG_ERROR, sc, "null", "null");
                 } 
                 else {
                     String oldRoom = clients.get(sc).room;
                     clients.get(sc).room = "";
                     clients.get(sc).state = ClientState.OUTSIDE;
 
-                    unicast(MsgType.MSG_OK, sc, "null");
-                    broadcast(MsgType.MSG_LEFT, sc, oldRoom, "null");
+                    unicast(MsgType.MSG_OK, sc, "null", "null");
+                    broadcast(MsgType.MSG_LEFT, sc, oldRoom);
                 }
                 break;
             
             case BYE:
-                unicast(MsgType.MSG_BYE, sc, "null");
+                names.remove(clients.get(sc).name);
+                unicast(MsgType.MSG_BYE, sc, "null", "null");
                 if (clients.get(sc).state == ClientState.INSIDE) {
-                    broadcast(MsgType.MSG_LEFT, sc, "null", "null");
+                    broadcast(MsgType.MSG_LEFT, sc, "null");
                 }
                 break;
             
             case MESSAGE:
                 if (clients.get(sc).state == ClientState.INSIDE) {
-                    broadcast(MsgType.MSG_MESSAGE, sc, msg, "null");
+                    broadcast(MsgType.MSG_MESSAGE, sc, msg);
                 }
                 else {
-                    unicast(MsgType.MSG_ERROR, sc, "null");
+                    unicast(MsgType.MSG_ERROR, sc, "null", "null");
+                }
+                break;
+
+            case PRIVATE:
+                // mensagem privada, o token antes do primeiro espaço é o nome do destinatário
+                String[] parts = msg.split(" ", 2);
+                if (parts.length == 2) {
+                    String name = parts[0];
+                    String privMsg = parts[1];
+                    // procurar no conjunto de nomes se o destinatário existe
+                    if (names.contains(name)) {
+                        unicast(MsgType.MSG_OK, sc, "null", "null");
+                        // transformar a socket na socket do destinatário
+                        for (Map.Entry<SocketChannel, ClientInfo> c : clients.entrySet()) {
+                            if (c.getValue().name == name) {
+                                sc = c.getKey();
+                                break;
+                            }
+                        }
+                        unicast(MsgType.MSG_PRIVATE, sc, privMsg, name);
+                    }
+                    else {
+                        unicast(MsgType.MSG_ERROR, sc, "null", "null");
+                    }
+                }
+                else {
+                    unicast(MsgType.MSG_ERROR, sc, "null", "null");
                 }
                 break;
         }
     }
 
-    private static void unicast(MsgType type, SocketChannel sc, String msg) {
+    private static void unicast(MsgType type, SocketChannel sc, String msg, String name) {
         String output = null;
+
         switch (type) {
             case MSG_OK:
                 output = "OK\n";
@@ -359,43 +394,46 @@ public class ChatServer {
             case MSG_ERROR:
                 output = "ERROR\n";
                 break;
+            case MSG_PRIVATE:
+                output = "PRIVATE" + " " + name + " " + msg + "\n";
+                break;
             default:
                 break;
         }
-        ByteBuffer msgBuffer = ByteBuffer.wrap(output.getBytes());
+        ByteBuffer outputBuffer = ByteBuffer.wrap(output.getBytes());
         try {
-            msgBuffer.rewind();
-            sc.write(msgBuffer);
+            outputBuffer.rewind();
+            sc.write(outputBuffer);
         } catch (IOException e) {}
     }
 
-    private static void broadcast(MsgType type, SocketChannel sc, String msg1, String msg2) {
+    private static void broadcast(MsgType type, SocketChannel sc, String msg) {
         String room = clients.get(sc).room;
-        String msg = null;
+        String output = null;
         List<SocketChannel> dest = null;
 
         switch (type) {
         
             case MSG_NEWNICK:
-                // msg1 guarda o nick antigo
-                msg = "NEWNICK" + " " + msg1 + " " + clients.get(sc).name + "\n";
+                // msg guarda o nick antigo
+                output = "NEWNICK" + " " + msg + " " + clients.get(sc).name + "\n";
                 dest = otherUsersInRoom(sc, room);
                 break;
             
             case MSG_JOINED:
-                msg = "JOINED" + " " + clients.get(sc).name + "\n";
+                output = "JOINED" + " " + clients.get(sc).name + "\n";
                 dest = otherUsersInRoom(sc, room);
                 break;
 
             case MSG_LEFT:
-                msg = "LEFT" + " " + clients.get(sc).name + "\n";
-                // msg1 guarda o room antigo
-                dest = otherUsersInRoom(sc, msg1);
+                output = "LEFT" + " " + clients.get(sc).name + "\n";
+                // msg guarda o room antigo
+                dest = otherUsersInRoom(sc, msg);
                 break;
             
             case MSG_MESSAGE:
                 // msg1 guarda a mensagem
-                msg = "MESSAGE" + " " + clients.get(sc).name + " " + msg1 + "\n";
+                output = "MESSAGE" + " " + clients.get(sc).name + " " + msg + "\n";
                 dest = allUsersInRoom(sc, room);
                 break;
 
@@ -403,11 +441,11 @@ public class ChatServer {
                 break;
         }
         
-        ByteBuffer msgBuffer = ByteBuffer.wrap(msg.getBytes());
+        ByteBuffer outputBuffer = ByteBuffer.wrap(output.getBytes());
         for (SocketChannel c : dest) {
             try {
-                msgBuffer.rewind();
-                c.write(msgBuffer);
+                outputBuffer.rewind();
+                c.write(outputBuffer);
             } catch (IOException e) {}
         }   
 
