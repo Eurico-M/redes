@@ -54,7 +54,7 @@ public class ChatServer {
             this.name = "Client_" + this.id;
             this.room = "";
             this.buffer = ByteBuffer.allocate(16384);
-            this.state = ClientState.OUTSIDE;
+            this.state = ClientState.INIT;
         };
     }
 
@@ -186,46 +186,58 @@ public class ChatServer {
             return false;
         }
 
-        processClientBuffer(sc, client);
-
-        return true;
+        boolean keepAlive = processClientBuffer(sc, client);
+        return keepAlive;
     }
 
     // lidar com a delineação de mensagens
-    private static void processClientBuffer(SocketChannel sc, ClientInfo client) {
+    private static boolean processClientBuffer(SocketChannel sc, ClientInfo client) throws IOException {
         ByteBuffer buffer = client.buffer;
-
+        
+        // Read data if available
         buffer.flip();
-
-        String received = null;
-        try {
-            received = decoder.decode(buffer).toString();
-        } catch (CharacterCodingException e) {
-            e.printStackTrace();
-        }
-        // percorrer a string
-        int start = 0;
-        while (true) {
-            // marcar a primeira instância de '\n'
-            int newlinePosition = received.indexOf('\n', start);
-            // se não houver nenhuma, guardar a string no buffer novamente (ainda não recebemos a mensagem toda)
-            if (newlinePosition == -1) {
+        
+        if (buffer.hasRemaining()) {
+            String received = null;
+            try {
+                received = decoder.decode(buffer).toString();
+            } catch (CharacterCodingException e) {
                 buffer.clear();
-                buffer.put(received.getBytes());
-                break;
             }
-            // se houver, processar a linha até essa posição
-            String line = received.substring(start, newlinePosition).trim();
-            // não enviar linhas vazias
-            if (!line.isEmpty()) {
-                processLine(sc, client, line);
+            
+            // Clear buffer AFTER decoding
+            buffer.clear();
+            
+            int start = 0;
+            while (true) {
+                int newlinePos = received.indexOf('\n', start);
+                if (newlinePos == -1) {
+                    // Save incomplete message back to buffer
+                    String remaining = received.substring(start);
+                    if (!remaining.isEmpty()) {
+                        buffer.put(remaining.getBytes());
+                    }
+                    break;
+                }
+                
+                String line = received.substring(start, newlinePos).trim();
+                if (!line.isEmpty()) {
+                    boolean keepAlive = processLine(sc, client, line);
+                    if (!keepAlive) {
+                        return false;
+                    }
+                }
+                
+                start = newlinePos + 1;
+                if (start >= received.length()) {
+                    break;
+                }
             }
-            // processar próxima linha, isto é, marcar start como o próximo index depois do último newline
-            start = newlinePosition + 1;
         }
+        return true;
     }
 
-    private static void processLine(SocketChannel sc, ClientInfo client, String line) {
+    private static boolean processLine(SocketChannel sc, ClientInfo client, String line) {
         // método semelhante (mas inverso) ao implementado no cliente para fazer escape de '/'
         String escapedLine = "";
         if (line.charAt(0) == '/') {
@@ -235,33 +247,37 @@ public class ChatServer {
             escapedLine = line;
         }
 
-        if (escapedLine.startsWith("/nick")) {
+        boolean keepAlive;
+
+        if (escapedLine.startsWith("/nick ")) {
             String newNick = escapedLine.substring(6);
-            processTransition(Command.NICK, sc, newNick);
+            keepAlive = processTransition(Command.NICK, sc, newNick);
         }
-        else if (escapedLine.startsWith("/join")) {
+        else if (escapedLine.startsWith("/join ")) {
             String newRoom = escapedLine.substring(6);
-            processTransition(Command.JOIN, sc, newRoom);
+            keepAlive = processTransition(Command.JOIN, sc, newRoom);
         }
-        else if (escapedLine.startsWith("/leave")) {
-            processTransition(Command.LEAVE, sc, "null");
+        else if (escapedLine.equals("/leave")) {
+            keepAlive = processTransition(Command.LEAVE, sc, "null");
         }
-        else if (escapedLine.startsWith("/bye")) {
-            processTransition(Command.BYE, sc, "null");
+        else if (escapedLine.equals("/bye")) {
+            keepAlive = processTransition(Command.BYE, sc, "null");
         }
-        else if (escapedLine.startsWith("/priv")) {
+        else if (escapedLine.startsWith("/priv ")) {
             String privMsg = escapedLine.substring(6);
-            processTransition(Command.PRIVATE, sc, privMsg);
+            keepAlive = processTransition(Command.PRIVATE, sc, privMsg);
         }
         else {
-            processTransition(Command.MESSAGE, sc, escapedLine);
+            keepAlive = processTransition(Command.MESSAGE, sc, escapedLine);
         }
+
+        return keepAlive;
     }
 
     private static List<SocketChannel> allUsersInRoom(SocketChannel sc, String room) {
         List<SocketChannel> output = new LinkedList<>();
         for (Map.Entry<SocketChannel, ClientInfo> c : clients.entrySet()) {
-            if (c.getValue().room == room) {
+            if (c.getValue().room.equals(room)) {
                 output.add(c.getKey());
             }
         }
@@ -271,15 +287,17 @@ public class ChatServer {
     private static List<SocketChannel> otherUsersInRoom(SocketChannel sc, String room) {
         List<SocketChannel> output = new LinkedList<>();
         for (Map.Entry<SocketChannel, ClientInfo> c : clients.entrySet()) {
-            if (c.getKey() != sc && c.getValue().room == room) {
+            if (c.getKey() != sc && c.getValue().room.equals(room)) {
                 output.add(c.getKey());
             }
         }
         return output;
     }
 
-    private static void processTransition(Command cmd, SocketChannel sc, String msg) {
+    private static boolean processTransition(Command cmd, SocketChannel sc, String msg) {
         // máquina de estados
+        // "msg" não é necessariamente uma mensagem, pode ser várias coisas conforme o tipo
+        // de comando: mensagem, nickname novo/antigo , sala abandonada por um cliente, etc.
         switch (cmd) {
 
             case NICK:
@@ -339,12 +357,15 @@ public class ChatServer {
                 break;
             
             case BYE:
-                names.remove(clients.get(sc).name);
                 unicast(MsgType.MSG_BYE, sc, "null", "null");
                 if (clients.get(sc).state == ClientState.INSIDE) {
-                    broadcast(MsgType.MSG_LEFT, sc, "null");
+                    broadcast(MsgType.MSG_LEFT, sc, clients.get(sc).room);
                 }
-                break;
+
+                // limpar os meus sets que andam a tomar conta de coisas
+                names.remove(clients.get(sc).name);
+                clients.remove(sc);
+                return false;
             
             case MESSAGE:
                 if (clients.get(sc).state == ClientState.INSIDE) {
@@ -359,19 +380,23 @@ public class ChatServer {
                 // mensagem privada, o token antes do primeiro espaço é o nome do destinatário
                 String[] parts = msg.split(" ", 2);
                 if (parts.length == 2) {
-                    String name = parts[0];
+                    String destName = parts[0];
                     String privMsg = parts[1];
                     // procurar no conjunto de nomes se o destinatário existe
-                    if (names.contains(name)) {
+                    if (names.contains(destName)) {
                         unicast(MsgType.MSG_OK, sc, "null", "null");
                         // transformar a socket na socket do destinatário
+                        SocketChannel destSC = null;
                         for (Map.Entry<SocketChannel, ClientInfo> c : clients.entrySet()) {
-                            if (c.getValue().name == name) {
-                                sc = c.getKey();
+                            if (c.getValue().name.equals(destName)) {
+                                destSC = c.getKey();
                                 break;
                             }
                         }
-                        unicast(MsgType.MSG_PRIVATE, sc, privMsg, name);
+                        // mandar a mensagem privada primeiro, só depois enviar a confirmação,
+                        // parece-me mais "correcto"
+                        unicast(MsgType.MSG_PRIVATE, destSC, privMsg, clients.get(sc).name);
+                        unicast(MsgType.MSG_OK, sc, "null", "null");
                     }
                     else {
                         unicast(MsgType.MSG_ERROR, sc, "null", "null");
@@ -382,9 +407,15 @@ public class ChatServer {
                 }
                 break;
         }
+        return true;
     }
 
     private static void unicast(MsgType type, SocketChannel sc, String msg, String name) {
+        
+        if (sc == null) {
+            System.err.println("unicast to a NULL SocketChannel");
+        }
+
         String output = null;
 
         switch (type) {
@@ -393,6 +424,9 @@ public class ChatServer {
                 break;
             case MSG_ERROR:
                 output = "ERROR\n";
+                break;
+            case MSG_BYE:
+                output = "BYE\n";
                 break;
             case MSG_PRIVATE:
                 output = "PRIVATE" + " " + name + " " + msg + "\n";

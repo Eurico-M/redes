@@ -2,7 +2,6 @@ import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
 import java.net.*;
-import java.util.*;
 import javax.swing.*;
 
 public class ChatClient {
@@ -125,7 +124,7 @@ public class ChatClient {
                 String serverMessage;
                 while ((serverMessage = in.readLine()) != null) {
                     // This will be called from a non-EDT thread, so use SwingUtilities
-                    final String msg = serverMessage;
+                    final String msg = serverMessage + "\n";
                     SwingUtilities.invokeLater(
                         new Runnable() {
                             @Override
