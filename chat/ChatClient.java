@@ -115,6 +115,38 @@ public class ChatClient {
         }
     }
 
+    // receber 5% da pontuação! yay!
+    private static String friendlyFormat(String serverMessage) {
+        String outString = "";
+
+        String[] parts = serverMessage.split(" ", 2);
+        if (parts[0].equals("MESSAGE")) {
+            String[] subparts = parts[1].split(" ", 2);
+            outString = subparts[0] + ": " + subparts[1] + "\n";
+        }
+        else if (parts[0].equals("NEWNICK")) {
+            String[] subparts = parts[1].split(" ", 2);
+            outString = subparts[0] + " mudou de nome para " + subparts[1] + "\n";
+        }
+        else if (parts[0].equals("LEFT")) {
+            outString = parts[1] + " saiu da sala\n";
+        }
+        else if (parts[0].equals("JOINED")) {
+            outString = parts[1] + " entrou na sala\n";
+        }
+        else if (parts[0].equals("PRIVATE")) {
+            String[] subparts = parts[1].split(" ", 2);
+            outString = "*Mensagem Privada* " + subparts[0] + ": " + subparts[1] + "\n";
+        }
+        else {
+            outString = serverMessage + "\n";
+        }
+
+        return outString;
+    }
+
+
+
     // Escutar o Servidor para receber mensagens
     private class ServerListener implements Runnable {
 
@@ -123,8 +155,8 @@ public class ChatClient {
             try {
                 String serverMessage;
                 while ((serverMessage = in.readLine()) != null) {
-                    // This will be called from a non-EDT thread, so use SwingUtilities
-                    final String msg = serverMessage + "\n";
+                    String msg = friendlyFormat(serverMessage);
+                    //final String msg = serverMessage + "\n";
                     SwingUtilities.invokeLater(
                         new Runnable() {
                             @Override

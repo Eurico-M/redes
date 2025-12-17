@@ -194,7 +194,6 @@ public class ChatServer {
     private static boolean processClientBuffer(SocketChannel sc, ClientInfo client) throws IOException {
         ByteBuffer buffer = client.buffer;
         
-        // Read data if available
         buffer.flip();
         
         if (buffer.hasRemaining()) {
@@ -205,14 +204,12 @@ public class ChatServer {
                 buffer.clear();
             }
             
-            // Clear buffer AFTER decoding
             buffer.clear();
             
             int start = 0;
             while (true) {
                 int newlinePos = received.indexOf('\n', start);
                 if (newlinePos == -1) {
-                    // Save incomplete message back to buffer
                     String remaining = received.substring(start);
                     if (!remaining.isEmpty()) {
                         buffer.put(remaining.getBytes());
